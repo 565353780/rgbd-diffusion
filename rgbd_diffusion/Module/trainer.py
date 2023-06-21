@@ -10,7 +10,7 @@ from rgbd_diffusion.Model.model import Model
 
 
 class Trainer(object):
-    def __init__(self):
+    def __init__(self, dataset_folder_path, model_file_path):
         self.chunk_size = 8
         self.img_size = 128
         self.train_split_ratio = 0.8016702610930115
@@ -50,14 +50,14 @@ class Trainer(object):
         if self.fp16_mode:
             self.scaler = torch.cuda.amp.GradScaler()
 
-        # self.loadDataset()
-        self.loadModel()
+        self.loadDataset(dataset_folder_path)
+        self.loadModel(model_file_path)
         self.loadOptimizer()
         return
 
-    def loadDataset(self):
+    def loadDataset(self, dataset_folder_path):
         dataset_create_fn = partial(ScanNet,
-                                    osp.abspath("./data_file/ScanNetV2"),
+                                    dataset_folder_path,
                                     chunk_size=self.chunk_size,
                                     img_size=self.img_size,
                                     normalize=True,
@@ -86,7 +86,7 @@ class Trainer(object):
         self.diffusion_scheduler = None
         return True
 
-    def loadModel(self):
+    def loadModel(self, model_file_path):
         return True
 
     def loadOptimizer(self):
