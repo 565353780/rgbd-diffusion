@@ -1,6 +1,5 @@
 import os.path as osp
 import re
-from glob import glob
 
 import cv2
 import numpy as np
@@ -8,7 +7,12 @@ import torch
 import torch.nn.functional as F
 from einops import rearrange
 from numpy.lib.recfunctions import unstructured_to_structured
+from rgbd_diffusion.Method.glob import parallel_glob
 from torch.utils.data import Dataset
+
+
+def to_int(x):
+    return [int(i) for i in x]
 
 
 class ScanNet(Dataset):
@@ -22,19 +26,20 @@ class ScanNet(Dataset):
                  ):
         super().__init__()
         color_list = sorted(
-            glob(osp.join(path, "*", "color", "*.jpg"), recursive=True))
+            parallel_glob(osp.join(path, "*", "color", "*.jpg"),
+                          recursive=True))
         depth_list = sorted(
-            glob(osp.join(path, "*", "depth", "*.png"), recursive=True))
+            parallel_glob(osp.join(path, "*", "depth", "*.png"),
+                          recursive=True))
         pose_list = sorted(
-            glob(osp.join(path, "*", "pose",  "*.txt"), recursive=True))
-        intr_list = glob(osp.join(path, "*", "intrinsic",
-                         "intrinsic_depth.txt"), recursive=True)
+            parallel_glob(osp.join(path, "*", "pose",  "*.txt"),
+                          recursive=True))
+        intr_list = parallel_glob(osp.join(path, "*", "intrinsic",
+                                  "intrinsic_depth.txt"), recursive=True)
         file_path = np.rec.fromarrays(
             [color_list, depth_list, pose_list],
             names=("color", "depth", "pose"),
         )
-        # sort
-        def to_int(x): return [int(i) for i in x]
 
         number_id = np.asarray([to_int(re.findall("\d+", osp.relpath(p, path)))
                                 for p in file_path.color])
@@ -58,7 +63,7 @@ class ScanNet(Dataset):
                 number_id = number_id[-subset_indices:]
         # identify camera intrinsic
         cache_intr = np.stack([np.loadtxt(p)[:3, :3]
-                              for p in intr_list], axis=0)  # (?, 3, 3)
+                               for p in intr_list], axis=0)  # (?, 3, 3)
         cache_intr_keys = ["|".join(re.findall("\d+", osp.relpath(p, path)))
                            for p in intr_list]
         cache_intr_colle = []
@@ -75,10 +80,10 @@ class ScanNet(Dataset):
         info_chunk = []
         for ind_end in range(len(file_path)):  # -3, -2, -1, 0   c==4
             ind_start = ind_end - chunk_size + 1
-            target_scene = number_id[ind_end, :2]
+            target_scene = number_id[ind_end, : 2]
             chunk_indices = []
             for ind in range(ind_start, ind_end):
-                my_scene = number_id[ind, :2]
+                my_scene = number_id[ind, : 2]
                 chunk_indices.append(
                     ind if (my_scene == target_scene).all() else None)
             chunk_indices.append(ind_end)
