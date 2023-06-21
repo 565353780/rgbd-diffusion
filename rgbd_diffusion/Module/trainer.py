@@ -45,6 +45,10 @@ class Trainer(object):
         self.batch_size = self.batch_size_per_gpu * self.num_rank
         torch.manual_seed(self.seed)
 
+        self.train_loader = None
+        self.val_loader = None
+        self.mean_std = None
+
         self.model = Model(self.img_size, self.fp16_mode)
         # convert batchnorm
         if self.num_rank > 1:
@@ -54,6 +58,10 @@ class Trainer(object):
         self.scaler = None
         if self.fp16_mode:
             self.scaler = torch.cuda.amp.GradScaler()
+
+        self.optimizer = None
+        self.scheduler = None
+        self.diffusion_scheduler = None
 
         self.loadDataset(dataset_folder_path)
         self.loadModel(model_file_path)
@@ -73,22 +81,15 @@ class Trainer(object):
             subset_indices=1.0 - self.train_split_ratio)
 
         samplers = dist_samplers(dataset_train, dataset_test)
-        self.dataloaders = dict(train=torch.utils.data.DataLoader(
+        self.train_loader = torch.utils.data.DataLoader(
             dataset_train, **kwargs_shuffle_sampler(samplers, "train"),
-            batch_size=self.batch_size_per_gpu, num_workers=4,
-        ),
-            val=torch.utils.data.DataLoader(
+            batch_size=self.batch_size_per_gpu, num_workers=4)
+        self.val_loader = torch.utils.data.DataLoader(
             dataset_test, **kwargs_shuffle_sampler(samplers, "val"),
-            batch_size=self.batch_size_per_gpu, num_workers=2,
-        ),
-        )
+            batch_size=self.batch_size_per_gpu, num_workers=2)
 
         self.mean_std = dataset_train.normalize_mean_std.to(
             device=self.device)
-
-        self.optimizer = None
-        self.scheduler = None
-        self.diffusion_scheduler = None
         return True
 
     def loadModel(self, model_file_path):
@@ -114,7 +115,7 @@ class Trainer(object):
             set_alpha_to_one=False)
         return True
 
-    def eval_loss(self, batch_data, drop_one=0.1, drop_all=0.1, mode="train"):
+    def getLoss(self, batch_data, drop_one=0.1, drop_all=0.1, mode="train"):
         assert mode in ("train", "eval")
 
         # perform augmentation
@@ -154,12 +155,12 @@ class Trainer(object):
 
         return loss_cor_dict | loss_dep_dict
 
-    def train_step_fn(self, batch_data):
+    def trainStep(self, batch_data):
         self.model.train()
 
         # compute loss
         batch_data = move_to(batch_data, device=self.device)
-        loss_dict = self.eval_loss(batch_data, mode="train")
+        loss_dict = self.getLoss(batch_data, mode="train")
         loss_dict = combine_loss(loss_dict)
 
         # update model
@@ -175,7 +176,7 @@ class Trainer(object):
         return dict(**{k: v.item() for k, v in loss_dict.items()},
                     lr=self.optimizer.param_groups[0]["lr"])
 
-    @torch.no_grad()
+    @ torch.no_grad()
     def evaluate_fn(self, val_loader):
         self.model.eval()
 
