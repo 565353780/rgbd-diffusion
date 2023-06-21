@@ -1,12 +1,17 @@
 import math
-import os.path as osp
+from collections import defaultdict
 from functools import partial
 
 import torch
+import torch.nn.functional as F
 from diffusers import DDIMScheduler
 from recon.utils import dist_info, dist_samplers, kwargs_shuffle_sampler
 from rgbd_diffusion.Dataset.scannet import ScanNet
+from rgbd_diffusion.Method.augment import data_augmentation
+from rgbd_diffusion.Method.device import move_to
+from rgbd_diffusion.Method.loss import combine_loss
 from rgbd_diffusion.Model.model import Model
+from tqdm import tqdm
 
 
 class Trainer(object):
@@ -108,3 +113,87 @@ class Trainer(object):
             clip_sample=False,
             set_alpha_to_one=False)
         return True
+
+    def eval_loss(self, batch_data, drop_one=0.1, drop_all=0.1, mode="train"):
+        assert mode in ("train", "eval")
+
+        # perform augmentation
+        if mode == "train":
+            batch_data = data_augmentation(batch_data)
+
+        # get data
+        rgbd = batch_data["rgbd"]
+        pose = batch_data["pose"]
+        intr = batch_data["intr"]
+
+        # sample time steps
+        t = torch.randint(
+            0, self.diffusion_scheduler.config.num_train_timesteps,
+            size=(len(rgbd), ), device=rgbd.device,
+        )
+
+        # make image noisy
+        noise = torch.randn_like(rgbd[:, -1])
+        # has been noised
+        rgbd[:, -1] = self.diffusion_scheduler.add_noise(rgbd[:, -1], noise, t)
+
+        # make it unconditional
+        drop_msk = torch.rand(rgbd.shape[:2]) < drop_one  # drop some views
+        drop_msk[torch.rand(len(rgbd)) < drop_all] = True  # drop all
+        drop_msk[:, -1] = False  # don't drop current view
+        rgbd[drop_msk] = 0.0  # drop by setting depth to zero
+
+        # compute loss
+        with torch.cuda.amp.autocast(enabled=self.fp16_mode):
+            pred_noise = self.model(rgbd, (intr, pose), t)
+            # compute loss
+            loss_cor_dict = {"loss_color": F.l1_loss(
+                pred_noise[:, :3], noise[:, :3])}
+            loss_dep_dict = {"loss_depth": F.l1_loss(
+                pred_noise[:, [3]], noise[:, [3]])}
+
+        return loss_cor_dict | loss_dep_dict
+
+    def train_step_fn(self, batch_data):
+        self.model.train()
+
+        # compute loss
+        batch_data = move_to(batch_data, device=self.device)
+        loss_dict = self.eval_loss(batch_data, mode="train")
+        loss_dict = combine_loss(loss_dict)
+
+        # update model
+        self.optimizer.zero_grad()
+        if self.fp16_mode:
+            self.scaler.scale(loss_dict["loss"]).backward()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+        else:
+            loss_dict["loss"].backward()
+            self.optimizer.step()
+
+        return dict(**{k: v.item() for k, v in loss_dict.items()},
+                    lr=self.optimizer.param_groups[0]["lr"])
+
+    @torch.no_grad()
+    def evaluate_fn(self, val_loader):
+        self.model.eval()
+
+        count = 0.0
+        total_loss_dict = defaultdict(float)
+        # each process will compute
+        for batch_data in tqdm(val_loader, desc="evaluating"):
+            batch_size = len(batch_data["rgbd"])
+
+            # compute loss
+            batch_data = move_to(batch_data, device=self.device)
+            loss_dict = self.eval_loss(batch_data, mode="eval")
+            loss_dict = combine_loss(loss_dict)
+
+            # update numbers
+            count += batch_size
+            for k, v in loss_dict.items():
+                total_loss_dict[k] += v.item() * batch_size  # sum
+
+        # average
+        return {k: v/count for k, v in total_loss_dict.items()}
