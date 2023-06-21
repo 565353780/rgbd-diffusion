@@ -1,23 +1,12 @@
 import math
-import os
 import os.path as osp
-import sys
-from collections import defaultdict
 from functools import partial
-from types import SimpleNamespace
 
-import nvdiffrast.torch as dr
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import trimesh
 from diffusers import DDIMScheduler
-from einops import rearrange
 from recon.utils import dist_info, dist_samplers, kwargs_shuffle_sampler
 from rgbd_diffusion.Dataset.scannet import ScanNet
-from rgbd_diffusion.Method.augment import data_augmentation
 from rgbd_diffusion.Model.model import Model
-from tqdm import tqdm
 
 
 class Trainer(object):
