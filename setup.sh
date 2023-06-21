@@ -3,6 +3,8 @@ pip install matplotlib opencv-python einops \
 
 pip install torch torchvision torchaudio
 
+pip install git+https://github.com/wookayin/gpustat.git@master
+
 cd ./third_party/latent-diffusion/
 pip install .
 
