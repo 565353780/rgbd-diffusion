@@ -1,4 +1,5 @@
 import math
+import os
 from collections import defaultdict
 from functools import partial
 
@@ -10,12 +11,16 @@ from rgbd_diffusion.Dataset.scannet import ScanNet
 from rgbd_diffusion.Method.augment import data_augmentation
 from rgbd_diffusion.Method.device import move_to
 from rgbd_diffusion.Method.loss import combine_loss
+from rgbd_diffusion.Method.path import createFileFolder, removeFile, renameFile
+from rgbd_diffusion.Method.time import getCurrentTime
 from rgbd_diffusion.Model.model import Model
+from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
 
 class Trainer(object):
-    def __init__(self, dataset_folder_path, model_file_path):
+    def __init__(self, dataset_folder_path, model_file_path,
+                 resume_model_only=False):
         self.chunk_size = 8
         self.img_size = 128
         self.train_split_ratio = 0.8016702610930115
@@ -49,6 +54,10 @@ class Trainer(object):
         self.val_loader = None
         self.mean_std = None
 
+        self.optimizer = None
+        self.scheduler = None
+        self.diffusion_scheduler = None
+
         self.model = Model(self.img_size, self.fp16_mode)
         # convert batchnorm
         if self.num_rank > 1:
@@ -59,13 +68,17 @@ class Trainer(object):
         if self.fp16_mode:
             self.scaler = torch.cuda.amp.GradScaler()
 
-        self.optimizer = None
-        self.scheduler = None
-        self.diffusion_scheduler = None
+        self.step = 0
+        self.eval_step = 0
+        self.loss_min = float('inf')
+        self.eval_loss_min = float('inf')
+        self.log_folder_name = getCurrentTime()
+
+        self.summary_writer = None
 
         self.loadDataset(dataset_folder_path)
-        self.loadModel(model_file_path)
         self.loadOptimizer()
+        self.loadModel(model_file_path, resume_model_only)
         return
 
     def loadDataset(self, dataset_folder_path):
@@ -92,9 +105,6 @@ class Trainer(object):
             device=self.device)
         return True
 
-    def loadModel(self, model_file_path):
-        return True
-
     def loadOptimizer(self):
         def learning_rate_fn(epoch):
             epoch_max = self.epoch_end
@@ -113,6 +123,62 @@ class Trainer(object):
             num_train_timesteps=1000,
             clip_sample=False,
             set_alpha_to_one=False)
+        return True
+
+    def loadSummaryWriter(self):
+        self.summary_writer = SummaryWriter(f"./logs/{self.log_folder_name}/")
+        return True
+
+    def resumeAll(self, model_dict):
+        self.optimizer.load_state_dict(model_dict['optimizer'])
+        self.step = model_dict['step']
+        self.eval_step = model_dict['eval_step']
+        self.loss_min = model_dict['loss_min']
+        self.eval_loss_min = model_dict['eval_loss_min']
+        self.log_folder_name = model_dict['log_folder_name']
+        return True
+
+    def loadModel(self, model_file_path, resume_model_only=False):
+        if not os.path.exists(model_file_path):
+            self.loadSummaryWriter()
+            print("[WARN][Trainer::loadModel]")
+            print("\t model_file not exist! start training from step 0...")
+            return True
+
+        model_dict = torch.load(model_file_path)
+
+        self.model.load_state_dict(model_dict['model'])
+
+        if not resume_model_only:
+            self.resumeAll(model_dict)
+
+        self.loadSummaryWriter()
+        print("[INFO][Trainer::loadModel]")
+        print("\t load model success! start training from step " +
+              str(self.step) + "...")
+        return True
+
+    def saveModel(self, save_file_path):
+        createFileFolder(save_file_path)
+
+        appendix = '.' + save_file_path.split('.')[-1]
+        base_file_path = save_file_path.split(appendix)[0]
+        tmp_save_file_path = f'{base_file_path}_tmp{appendix}'
+
+        state_dict = {
+            'model': self.model.state_dict(),
+            'optimizer': self.optimizer.state_dict(),
+            'step': self.step,
+            'eval_step': self.eval_step,
+            'loss_min': self.loss_min,
+            'eval_loss_min': self.eval_loss_min,
+            'log_folder_name': self.log_folder_name,
+        }
+
+        torch.save(state_dict, tmp_save_file_path)
+
+        removeFile(save_file_path)
+        renameFile(tmp_save_file_path, save_file_path)
         return True
 
     def getLoss(self, batch_data, drop_one=0.1, drop_all=0.1, mode="train"):
@@ -173,8 +239,10 @@ class Trainer(object):
             loss_dict["loss"].backward()
             self.optimizer.step()
 
-        return dict(**{k: v.item() for k, v in loss_dict.items()},
+        data = dict(**{k: v.item() for k, v in loss_dict.items()},
                     lr=self.optimizer.param_groups[0]["lr"])
+        print('trainStep', data)
+        return True
 
     @ torch.no_grad()
     def evaluate_fn(self, val_loader):
@@ -198,3 +266,42 @@ class Trainer(object):
 
         # average
         return {k: v/count for k, v in total_loss_dict.items()}
+
+    def evalStep(self):
+        loss_dict = self.evaluate_fn(self.val_loader)
+        print('evalStep', loss_dict)
+        return True
+
+    def train(self, print_progress=False):
+        total_epoch = 10000000
+
+        self.model.zero_grad()
+        for epoch in range(total_epoch):
+            self.summary_writer.add_scalar(
+                "Lr/lr",
+                self.optimizer.state_dict()['param_groups'][0]['lr'],
+                self.step)
+
+            print("[INFO][Trainer::train]")
+            print("\t start training, epoch : " + str(epoch + 1) + "/" +
+                  str(total_epoch) + "...")
+            for_data = self.train_loader
+            if print_progress:
+                for_data = tqdm(for_data)
+            for data in for_data:
+                self.trainStep(data)
+                self.step += 1
+
+            self.scheduler.step()
+
+            print("[INFO][Trainer::train]")
+            print("\t start evaling, epoch : " + str(epoch + 1) + "/" +
+                  str(total_epoch) + "...")
+            for_data = self.eval_dataloader
+            if print_progress:
+                for_data = tqdm(for_data)
+            self.evalStep()
+            self.eval_step += 1
+
+            self.saveModel(f"./output/{self.log_folder_name}/model_last.pth")
+        return True
