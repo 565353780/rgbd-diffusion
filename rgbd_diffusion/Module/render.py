@@ -1,4 +1,3 @@
-
 import nvdiffrast.torch as dr
 import torch
 import trimesh
@@ -201,6 +200,13 @@ class Render(object):
         vertices, faces, attrs, ind_group = pack_meshes
         w2c_int, w2c_ext = self.c2w_to_w2c(*pack_cameras)
 
+        print('Start DEBUG--------------------')
+        print('vertices.shape:', vertices.shape)
+        print('faces.shape:', faces.shape)
+        print('attrs.shape:', attrs.shape)
+        print('ind_group.shape:', ind_group.shape)
+        print('ind_group:', ind_group)
+
         # for each mesh
         f_idx, v_idx = 0, 0
         z_mins, z_maxs = [], []
@@ -271,6 +277,9 @@ class Render(object):
         # depth's range
         z_max = torch.tensor(z_maxs, device=vertices.device)[:, None, None]
         z_min = torch.tensor(z_mins, device=vertices.device)[:, None, None]
+
+        print('coord_clip.sahpe:', coord_clip.shape)
+        print('Finish DEBUG--------------------')
 
         # render
         # has already on CPU

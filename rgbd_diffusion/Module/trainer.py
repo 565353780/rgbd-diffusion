@@ -90,13 +90,15 @@ class Trainer(object):
                                     inter_mode="nearest")
         dataset_train = dataset_create_fn(
             subset_indices=self.train_split_ratio)
-        dataset_test = dataset_create_fn(
-            subset_indices=1.0 - self.train_split_ratio)
+        #dataset_test = dataset_create_fn(
+        #    subset_indices=1.0 - self.train_split_ratio)
+        dataset_test = dataset_train
 
         samplers = dist_samplers(dataset_train, dataset_test)
         self.train_loader = torch.utils.data.DataLoader(
             dataset_train, **kwargs_shuffle_sampler(samplers, "train"),
             batch_size=self.batch_size_per_gpu, num_workers=4)
+
         self.val_loader = torch.utils.data.DataLoader(
             dataset_test, **kwargs_shuffle_sampler(samplers, "val"),
             batch_size=self.batch_size_per_gpu, num_workers=2)
