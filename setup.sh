@@ -1,5 +1,5 @@
 pip install matplotlib opencv-python einops \
-	trimesh diffusers ninja open3d
+	trimesh diffusers ninja open3d tensorboard
 
 pip install torch torchvision torchaudio
 
