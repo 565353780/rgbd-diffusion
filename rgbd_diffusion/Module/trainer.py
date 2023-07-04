@@ -28,7 +28,7 @@ class Trainer(object):
         self.fp16_mode = True
         self.lr_init = 1e-4
         self.lr_final = 1e-6
-        self.batch_size_per_gpu = 40
+        self.batch_size_per_gpu = 1
         self.seed = 3407
 
         # training
