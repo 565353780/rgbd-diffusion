@@ -58,7 +58,7 @@ class Trainer(object):
         self.scheduler = None
         self.diffusion_scheduler = None
 
-        self.model = Model(self.img_size, self.fp16_mode)
+        self.model = Model(self.img_size, self.fp16_mode).cuda()
         # convert batchnorm
         if self.num_rank > 1:
             self.model = torch.nn.SyncBatchNorm.convert_sync_batchnorm(
@@ -212,7 +212,7 @@ class Trainer(object):
 
         # compute loss
         with torch.cuda.amp.autocast(enabled=self.fp16_mode):
-            pred_noise = self.model(rgbd, (intr, pose), t)
+            pred_noise = self.model(rgbd, (intr, pose), t, self.mean_std)
             # compute loss
             loss_cor_dict = {"loss_color": F.l1_loss(
                 pred_noise[:, :3], noise[:, :3])}

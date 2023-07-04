@@ -87,7 +87,7 @@ class Model(nn.Module, Render):
         # (B, C, H, W) / (B, H, W)
         return SimpleNamespace(rgbd=rgbd_out, mask=mask_out)
 
-    def forward(self, rgbd, cam, t):
+    def forward(self, rgbd, cam, t, mean_std):
         """
         Args:
             rgbd.shape == (B, N, C, H, W)
@@ -107,7 +107,7 @@ class Model(nn.Module, Render):
             rgbd[:, :-1],
             (camint[:, :-1], camext[:, :-1]),
             (camint[:,  -1], camext[:,  -1]),
-        ).rgbd  # (B, C, H, W)
+            mean_std).rgbd  # (B, C, H, W)
         #
         unet_in = torch.cat([rgbd_render, rgbd[:, -1]],
                             dim=1)  # (B, 4 + 4, H, W)
