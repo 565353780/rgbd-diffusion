@@ -200,13 +200,6 @@ class Render(object):
         vertices, faces, attrs, ind_group = pack_meshes
         w2c_int, w2c_ext = self.c2w_to_w2c(*pack_cameras)
 
-        print('Start DEBUG--------------------')
-        print('vertices.shape:', vertices.shape)
-        print('faces.shape:', faces.shape)
-        print('attrs.shape:', attrs.shape)
-        print('ind_group.shape:', ind_group.shape)
-        print('ind_group:', ind_group)
-
         # for each mesh
         f_idx, v_idx = 0, 0
         z_mins, z_maxs = [], []
@@ -216,6 +209,7 @@ class Render(object):
             f = faces[f_st:(f_st + f_cnt)] - v_st
             v = vertices[v_st:(v_st + v_cnt)]
             a = attrs[v_st:(v_st + v_cnt)]
+
             # project vertices
             v = torch.cat([v, v.new_ones([len(v), 1])], dim=1)
             v = torch.einsum("ik,jk->ij", v, w2c_ext[ind_mesh])
@@ -227,6 +221,9 @@ class Render(object):
             #
             msk_v = (z > self.depth_min) & (uv.abs() < 1).all(
                 dim=1)  # must be inside the bbox
+            # TODO: msk_v may all False
+            assert True in msk_v, 'msk_v is all False!'
+
             # TODO maybe `any` is better,
             # but compute of `msk_v` is a bit tricky
             msk_f = msk_v[f].all(dim=1)
@@ -277,9 +274,6 @@ class Render(object):
         # depth's range
         z_max = torch.tensor(z_maxs, device=vertices.device)[:, None, None]
         z_min = torch.tensor(z_mins, device=vertices.device)[:, None, None]
-
-        print('coord_clip.sahpe:', coord_clip.shape)
-        print('Finish DEBUG--------------------')
 
         # render
         # has already on CPU
